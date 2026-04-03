@@ -140,7 +140,11 @@ def assistant(state: AgentState, llm, langfuse_client=None) -> Dict[str, Any]:
             <act>Action to take:</act>
             <observe>Observation:</observe>
             Your final answer will be between <answer> and </answer> tags. \
-            You can access provided tools:\n{textual_description_of_tool}\n"""
+            You can access provided tools:
+            {textual_description_of_tool}
+
+            Always use the tools when appropriate to get factual information or perform calculations.
+            """
         )
     )
 
@@ -155,10 +159,10 @@ def assistant(state: AgentState, llm, langfuse_client=None) -> Dict[str, Any]:
     # Log the generation to Langfuse with reasoning_content
     if reasoning_content:
         reasoning_trace = {
-            "timestamp": time.time(),
+            # "timestamp": time.time(),
             "reasoning_content": reasoning_content,
-            "content": llm_response.content,
-            "tool_calls": llm_response.tool_calls if hasattr(llm_response, 'tool_calls') else None
+            # "content": llm_response.content,
+            # "tool_calls": llm_response.tool_calls if hasattr(llm_response, 'tool_calls') else None
         }
         reasoning_traces.append(reasoning_trace)
         
@@ -207,17 +211,6 @@ class BasicAgent:
 
     def build_llm_with_tools(self):
         print("Building Hugging Face model and tools...")
-        # Initialize the Hugging Face model
-        # llm = HuggingFaceEndpoint(
-        #     repo_id=self.model_name, 
-        #     provider=self.model_provider,
-        #     max_new_tokens=8192,
-        #     do_sample=False,
-        #     temperature=0.2,
-        # )
-
-        # chat_model = ChatHuggingFace(llm=llm)
-
         chat_model = ReasoningChatOpenAI(
             base_url=self.base_url,
             api_key=self.api_key,
@@ -263,6 +256,7 @@ class BasicAgent:
         run_name = f"agent_question_{task_id or uuid.uuid4().hex[:8]}"
 
         # Update the current trace with input metadata
+        print(f"\n📊 Starting trace: {run_name}")
         langfuse.update_current_trace(
             name=run_name,
             input={"question": question},
@@ -273,7 +267,7 @@ class BasicAgent:
             },
             tags=["agent", "question_answering", "reasoning_model"],
         )
-
+        
         # CallbackHandler auto-links to the current @observe() trace
         handler = CallbackHandler()
 
@@ -305,18 +299,24 @@ class BasicAgent:
             reasoning_traces = response.get('reasoning_traces', [])
 
             # Update trace with final output
+            output_data = {
+                "answer": answer,
+                "full_response": response_text,
+                "reasoning_traces": reasoning_traces,
+                "num_messages": len(response['messages']),
+            }
+            completion_metadata = {
+                "duration_seconds": end_time - start_time,
+                "has_reasoning": len(reasoning_traces) > 0,
+                "reasoning_steps": len(reasoning_traces),
+            }
+            
+            print(f"\n🔍 DEBUG: Updating trace with output={output_data}")
+            print(f"🔍 DEBUG: Updating trace with metadata={completion_metadata}")
+            
             langfuse.update_current_trace(
-                output={
-                    "answer": answer,
-                    "full_response": response_text,
-                    "reasoning_traces": reasoning_traces,
-                    "num_messages": len(response['messages']),
-                },
-                metadata={
-                    "duration_seconds": end_time - start_time,
-                    "has_reasoning": len(reasoning_traces) > 0,
-                    "reasoning_steps": len(reasoning_traces),
-                }
+                output = output_data,
+                metadata = completion_metadata,
             )
 
         except Exception as e:
@@ -328,7 +328,12 @@ class BasicAgent:
         finally:
             langfuse.flush()
 
-        print(f"Trace logged for task_id: {task_id}, reasoning_steps: {len(reasoning_traces)}")
+        print(f"\n✅ Trace '{run_name}' logged successfully!")
+        print(f"   - Task ID: {task_id}")
+        print(f"   - Reasoning steps: {len(reasoning_traces)}")
+        print(f"   - Duration: {end_time - start_time:.2f}s")
+        print(f"   - Answer: {answer}")
+        print(f"\n💡 In Langfuse UI: Click on '{run_name}' in the left panel (top level) to see full output/metadata\n")
 
         return answer
     
